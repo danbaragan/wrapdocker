@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+
+# Copy/link this file somewhere inside your path
+# This is the bash machinery to power docker builds, deployments and image/container manipulation for various edw projects.
+# This file holds all the logic save for extendable specific bits that located in each project build/deploy repo
+# and are meant to be sourced inside this file
+
+
+##  Init
+
+case $TERM in
+    *xterm*)
+        color_prompt=yes
+        # mac's bash (3.x) does not have fall through '&;' :-(
+        ;;
+    *color*)
+        color_prompt=yes
+        ;;
+    *)
+        color_prompt=no
+        ;;
+esac
+
+if [ "$color_prompt" = yes ]; then
+    White="[m[K"
+    Red="[0;31m[K"
+    Green="[0;32m[K"
+    Yellow="[0;33mK"
+    Blue="[0;34mK"
+else
+    White=
+    Red=
+    Green=
+    Yellow=
+    Blue=
+fi
+True=0
+False=1
+
+export g_env_file=.env
+
+
+## Helper functions
+
+_edw_set_env() {
+    while read -r ln; do
+        [[ -z "$ln" || "$ln" == \#* ]] || export $ln
+    done < $1
+}
+
+_edw_get_index() {
+    local value=$1
+    shift
+    # pass the rest of array as arguments to this function
+    local arr=($*)
+    local indexes=${!arr[@]}
+
+    for i in ${indexes[@]}; do
+        if [[ ${arr[$i]} = $value ]]; then
+            echo $i
+            return $True
+        fi
+    done
+    return $False
+}
+
+_edw_resolve_interpolated_var() {
+    local name="EDW_${1}_SRC"
+    eval res=\$$name
+    echo $res
+}
+
+_edw_show_run_context() {
+    OPTIND=1
+    local confirmation=
+
+    echo -e "${Yellow}=======================================================${White}\n"
+    echo "Building in dir: `pwd`"
+
+    while getopts ":edys" opt; do
+        case "$opt" in
+            e)
+                echo -e "\n${Yellow}Running eviroment vars:${White}"
+                env |grep -e'^EDW_'
+                ;;
+            d)
+                echo -e "\n${Yellow}Using files manifested in deploy.manifest:"
+                echo -e " (Make sure these files exist relative to current directory and contain proper configuration)${White}"
+                cat deploy.manifest
+                ;;
+            s)
+                echo -e "\n${Yellow}Command specific context:${White}"
+                _edw_command_specific_show_run_context
+                ;;
+            y)
+                confirmation=y
+                ;;
+            ?)
+                echo "Invalid option: -$OPTARG" >&2
+                _edw_help
+                exit 1
+                ;;
+            :)
+                echo "Option -$OPTARG requires an argument." >&2
+                _edw_help
+                exit 1
+                ;;
+        esac
+    done
+
+    echo -e "\n${Yellow}=======================================================${White}"
+    echo
+
+    if [ -z "$confirmation" ]; then
+        echo "${Yellow}Are you sure you want to proceed? (y/n)${White}"
+        read confirmation
+    fi
+
+    if [ "$confirmation" != "y" -a "$confirmation" != "Y" ]; then
+        return $False
+    else
+        return $True
+    fi
+}
+
+_edw_projects_images() {
+    # init output vars
+    local tag="$1"
+    local docker_only=${2:-false}
+    arr_docker_images=()
+    arr_full_docker_images=()
+
+    cd build
+    for dir in $(find * -maxdepth 0 -type d -print); do
+        if [ -n "$dir" ]; then
+            if [ $docker_only = false -o -f $dir/Dockerfile ]; then
+                arr_docker_images+=("$dir")
+            fi
+        fi
+    done
+    cd - >/dev/null
+
+    for img in "${arr_docker_images[@]}"; do
+        local full_img=${EDW_BUILD_DOCKERHUB}/${EDW_DEPLOY_PROJECT}_${img}:${tag}
+        arr_full_docker_images+=($full_img)
+    done
+}
+
+## Commands
+
+_edw_help() {
+    echo -e "Docker wrapper for various edw projects"
+    echo -e "This util will run docker images build, deploy, start and maintenace scripts"
+    echo -e "taking into consideration the variables from the current directory"
+    echo -e "Usage:"
+    echo -e "\t-e <env file>:  Source env vars from this file into edwd machinery; default is .env; don't export the vars, they are meant to live only inside this script."
+    echo -e "\tOther options"
+    echo -e "\t-h:  Show this help"
+}
+
+_edw_commands() {
+    echo "
+build"
+}
+
+
+# this function will start its own shell;
+# Thus it will not overwrite parent functions and definitios
+_edw_build_caged() (
+    OPTIND=1
+
+    _edw_help() {
+        echo -e "Build a docker image based on current repo dir and variables present in current environment and files in deploy.manifest"
+        echo -e "Usage:"
+        echo -e "\t-g branch:  if specified git branch/tag to clone before build; Default is master; EDW_<proj_name>_SRC var can override this clonnig and make a local directory the source for the image building"
+        echo -e "\t-t tag:  tag to push in git AND to create docker image with; Default is env \$EDW_BUILD_VER"
+        echo -e "\t-n:  no-push, Do not create git tag AND do not push image to docker.hub; Default is false"
+        echo -e "\tOther options"
+        echo -e "\t-y:  confirmed; Do not ask for user confirmation from stdin; Default is false"
+        echo -e "\t-q:  quiet mode; Do not output on stdout; Assume -y; Default is false"
+        echo -e "\t-h:  help; Display this message"
+}
+    
+    git_checkout=master
+    tag=$EDW_BUILD_VER
+    no_push=false
+    quiet=false
+    confirmation=
+    only_projects_with_docker=true
+    arr_docker_images=()
+    arr_full_docker_images=()
+
+    while getopts ":hqyng:t:" opt; do
+        case "$opt" in
+            g)
+                git_checkout=$OPTARG
+                ;;
+            t)
+                tag=$OPTARG
+                ;;
+            n)
+                no_push=true
+                ;;
+            q)
+                quiet=true
+                confirmation=-y
+                ;;
+            y)
+                confirmation=-y
+                ;;
+            h)
+                _edw_help
+                exit 0
+                ;;
+            ?)
+                echo "Invalid option: -$OPTARG" >&2
+                _edw_help
+                exit 1
+                ;;
+            :)
+                echo "Option -$OPTARG requires an argument." >&2
+                _edw_help
+                exit 1
+                ;;
+        esac
+    done
+
+    shift $((OPTIND-1))
+
+    _edw_projects_images "$tag" $only_projects_with_docker
+
+    # define this before calling _edw_show_run_context
+    _edw_command_specific_show_run_context() {
+        if [ "$no_push" = false ]; then
+            echo "${Red}We shall create git tag and push to docker.hub ($tag)${White}"
+        else
+            echo "${Yellow}We shall NOT create git tag and push to docker.hub ($tag)${White}"
+        fi
+        echo "Building based on git branch/tag: $git_checkout. EDW_<proj_name>_SRC might override this"
+        echo "Building projects ${Green}${arr_docker_images[@]}${White}"
+        for proj in "${arr_docker_images[@]}"; do
+            local idx=`_edw_get_index $proj ${arr_docker_images[@]}`
+            local src_dir=`_edw_get_src_dir $proj`
+            local repo=`_edw_get_repo $proj`
+            if [ -n "$src_dir" ]; then
+                echo -n "Building ${Green}${proj}${White} from local dir ${Yellow}${src_dir}${White}"
+            elif [ -n "$repo" ]; then
+                echo -n "Building ${Green}${proj}${White} from git ${Yellow}${repo}${White}"
+            else
+                echo -n "Building ${Green}${proj}${White} (no source required/specified)"
+            fi
+            echo " into image: ${Yellow}${arr_full_docker_images[$idx]}${White}"
+
+        done
+    }
+
+    _edw_get_src_dir() {
+        local proj=$1
+        local src_dir=`_edw_resolve_interpolated_var $proj`
+        echo $src_dir
+    }
+
+    _edw_get_repo() {
+        local proj=$1
+        local repo=
+        if [ -f build/${proj}/src.url ]; then
+            read repo <build/${proj}/src.url
+        fi
+        echo $repo
+    }
+
+    _edw_copy_local_src() {
+        local src=$1
+        local dest=$2
+        for f in `ls -a $src/`; do
+            [ "$f" = .git -o "$f" = . -o "$f" = .. ] && continue
+            # TODO what to do with symlinks? copy them as are and let docker daemon default behaviour kick in 
+            cp -R $src/$f $dest/
+        done
+    }
+    
+    go_on=$False
+    if [ "$quiet" = false ]; then
+        _edw_show_run_context -es "$confirmation"
+        go_on=$?
+    else
+        go_on=$True
+    fi
+    [ $go_on = $False ] && exit 0
+
+    # TODO veryfy this on windows
+    tmp_name=edwd.${PPID}.$$.${RANDOM}
+    mkdir -p $tmp_name
+    # for each project - build docker image
+    for proj in "${arr_docker_images[@]}"; do
+        idx=`_edw_get_index $proj ${arr_docker_images[@]}`
+        #echo "${arr_full_docker_images[$idx]}"
+
+        # get source dir and repo to clone; src_dir has priority
+        src_dir=`_edw_get_src_dir $proj`
+        docker_src_dir=
+        repo=`_edw_get_repo $proj`
+        build_args=()
+
+        # we have a local source dir
+        if [ -n "$src_dir" ]; then
+            local new_src_dir=$tmp_name/$proj
+            mkdir $new_src_dir
+            _edw_copy_local_src "$src_dir" $new_src_dir
+            src_dir=$new_src_dir
+        # we have a repo and not a local source dir overrinding it
+        elif [ -n "$repo" ]; then
+            cd $tmp_name
+            git clone --depth 1 --branch ${git_checkout} --single-branch $repo $proj &&\
+                src_dir=${tmp_name}/${proj}
+            cd - >/dev/null
+        fi
+
+        if [ -n "$src_dir" ]; then
+            build_args+=("EDW_SRC_DIR=$src_dir")
+        fi
+        if [ ${#build_args[@]} -gt 0 ]; then
+            build_args=("--build-arg" ${build_args[@]})
+        fi
+
+        if [ $quiet = false ]; then
+            echo
+            echo -n "[ ${Green}${proj}${White} ] "
+            echo "docker build -t ${arr_full_docker_images[$idx]} ${build_args[@]} -f build/$proj/Dockerfile ."
+        fi
+        docker build -t ${arr_full_docker_images[$idx]} ${build_args[@]} -f build/$proj/Dockerfile .
+
+        if [ $no_push = false ]; then
+            # TODO git: create tag, push; figure out which repo
+            docker push ${arr_full_docker_images[$idx]}
+        fi
+
+    done
+
+    if [ -d "$tmp_name" ]; then
+        rm -rf $tmp_name
+    fi
+    
+)
+
+_edw_deploy_caged() (
+    OPTIND=1
+
+    _edw_help() {
+        echo -e "Deploy project based own images from docker.hub and deployment files from this directory"
+        echo -e "\tUsage:"
+        echo -e "\t-t tag:  images tag to pull from docker.hub or use locally; Default is env \$EDW_BUILD_VER"
+        echo -e "\t-n:  no-pull, Do not pull images from docker.hub; assume they are present locally; Default is false"
+        echo -e "\tOther options"
+        echo -e "\t-y:  confirmed; Do not ask for user confirmation from stdin; Default is false"
+        echo -e "\t-q:  quiet mode; Do not output on stdout; Assume -y; Default is false"
+        echo -e "\t-h:  help; Display this message"
+    }
+
+    tag=$EDW_BUILD_VER
+    no_pull=false
+    quiet=false
+    confirmation=
+    only_projects_with_docker=true
+    arr_docker_images=()
+    arr_full_docker_images=()
+
+
+    while getopts ":hqynt:" opt; do
+        case "$opt" in
+            t)
+                tag=$OPTARG
+                ;;
+            n)
+                no_pull=true
+                ;;
+            q)
+                quiet=true
+                confirmation=-y
+                ;;
+            y)
+                confirmation=-y
+                ;;
+            h)
+                _edw_help
+                exit 0
+                ;;
+            ?)
+                echo "Invalid option: -$OPTARG" >&2
+                _edw_help
+                exit 1
+                ;;
+            :)
+                echo "Option -$OPTARG requires an argument." >&2
+                _edw_help
+                exit 1
+                ;;
+        esac
+    done
+
+    shift $((OPTIND-1))
+
+    _edw_projects_images "$tag"
+
+    # define this before calling _edw_show_run_context
+    _edw_command_specific_show_run_context() {
+        if [ "$no_pull" = false ]; then
+            echo "${Yellow}We shall pull images from docker.hub ($tag)${White}"
+        else
+            echo "${Yellow}We shall NOT pull images from docker.hub ${White}"
+        fi
+        echo "Building projects ${Green}${arr_docker_images[@]}${White}"
+        # FIXME Porjects without a Dockerfile did not built and are not to be found with arr_full_docker_images
+        # the docker-compose.yml specifies the tags; what to do with that? use env in there too?
+        for proj in "${arr_docker_images[@]}"; do
+            local idx=`_edw_get_index $proj ${arr_docker_images[@]}`
+        done
+    }
+
+
+ )
+
+## parse main script options 
+
+while getopts ":he:" opt; do
+    case "$opt" in
+        e)
+            g_env_file=$OPTARG
+            ;;
+        h)
+            _edw_help
+            exit 0
+            ;;
+        ?)
+            echo "Invalid option: -$OPTARG" >&2
+            _edw_help
+            exit 1
+            ;;
+        :)
+            echo "Option -$OPTARG requires an argument." >&2
+            _edw_help
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+_edw_set_env $g_env_file
+
+## Run command
+
+com=$1
+shift
+case "$com" in
+    build)
+        _edw_build_caged "$@"
+        ;;
+    deploy)
+        _edw_deploy_caged "$@"
+        ;;
+esac
+
+
+echo " ..go go go.. "
