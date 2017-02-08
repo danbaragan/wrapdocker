@@ -70,6 +70,15 @@ _edw_resolve_interpolated_var() {
     echo $res
 }
 
+_edw_bail_out_if_error() {
+    local verbose="$1"
+    if [ "$?" != 0 ]; then
+        if [ -n "$verbose" ]; then
+            echo "${Red}Somehing went wrong!${Yellow}Please manually investigate ${Green}${EDW_DEPLOY_HOST}${White}"
+        fi
+        exit 1
+    fi
+}
 _edw_show_run_context() {
     OPTIND=1
     local confirmation=
@@ -77,6 +86,11 @@ _edw_show_run_context() {
     echo -e "${Yellow}=======================================================${White}\n"
     echo "Building in dir: `pwd`"
 
+    #
+    # -e show environment
+    # -d show deploy manifest
+    # -s show command specific info
+    # -y don't ask for confirmation; assume confirmation
     while getopts ":edys" opt; do
         case "$opt" in
             e)
@@ -123,12 +137,43 @@ _edw_show_run_context() {
     fi
 }
 
+_edw_full_docker_image() {
+    local repo=$EDW_BUILD_DOCKERHUB
+    local tag=$EDW_BUILD_VER
+
+    OPTIND=1
+    while getopts ":r:t:" opt; do
+        case "$opt" in
+            r)
+                repo=$OPTARG
+                ;;
+            t)
+                tag=$OPTARG
+                ;;
+            ?)
+                echo "Invalid option: -$OPTARG" >&2
+                _edw_help
+                exit 1
+                ;;
+            :)
+                echo "Option -$OPTARG requires an argument." >&2
+                _edw_help
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND-1))
+    local name=$1
+    [ -z "$name" ] && echo "Give a subproject base name to form the docker image name" >&2
+
+    echo -n ${repo}/${EDW_DEPLOY_PROJECT}_${name}:${tag}
+}
+
 _edw_projects_images() {
     # init output vars
     local tag="$1"
-    local docker_only=${2:-false}
+    local docker_only=${2:-true}
     arr_docker_images=()
-    arr_full_docker_images=()
 
     cd build
     for dir in $(find * -maxdepth 0 -type d -print); do
@@ -139,11 +184,6 @@ _edw_projects_images() {
         fi
     done
     cd - >/dev/null
-
-    for img in "${arr_docker_images[@]}"; do
-        local full_img=${EDW_BUILD_DOCKERHUB}/${EDW_DEPLOY_PROJECT}_${img}:${tag}
-        arr_full_docker_images+=($full_img)
-    done
 }
 
 ## Commands
@@ -152,7 +192,7 @@ _edw_help() {
     echo -e "Docker wrapper for various edw projects"
     echo -e "This util will run docker images build, deploy, start and maintenace scripts"
     echo -e "taking into consideration the variables from the current directory"
-    echo -e "Usage:"
+    echo -e "Usage: edwd [options] command [command options]"
     echo -e "\t-e <env file>:  Source env vars from this file into edwd machinery; default is .env; don't export the vars, they are meant to live only inside this script."
     echo -e "\tOther options"
     echo -e "\t-h:  Show this help"
@@ -186,9 +226,7 @@ _edw_build_caged() (
     no_push=false
     quiet=false
     confirmation=
-    only_projects_with_docker=true
     arr_docker_images=()
-    arr_full_docker_images=()
 
     while getopts ":hqyng:t:" opt; do
         case "$opt" in
@@ -227,7 +265,7 @@ _edw_build_caged() (
 
     shift $((OPTIND-1))
 
-    _edw_projects_images "$tag" $only_projects_with_docker
+    _edw_projects_images "$tag"
 
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
@@ -239,9 +277,8 @@ _edw_build_caged() (
         echo "Building based on git branch/tag: $git_checkout. EDW_<proj_name>_SRC might override this"
         echo "Building projects ${Green}${arr_docker_images[@]}${White}"
         for proj in "${arr_docker_images[@]}"; do
-            local idx=`_edw_get_index $proj ${arr_docker_images[@]}`
             local src_dir=`_edw_get_src_dir $proj`
-            local repo=`_edw_get_repo $proj`
+            local repo=`_edw_get_src_repo $proj`
             if [ -n "$src_dir" ]; then
                 echo -n "Building ${Green}${proj}${White} from local dir ${Yellow}${src_dir}${White}"
             elif [ -n "$repo" ]; then
@@ -249,7 +286,7 @@ _edw_build_caged() (
             else
                 echo -n "Building ${Green}${proj}${White} (no source required/specified)"
             fi
-            echo " into image: ${Yellow}${arr_full_docker_images[$idx]}${White}"
+            echo " into image: ${Yellow}`_edw_full_docker_image -t $tag $proj`${White}"
 
         done
     }
@@ -260,7 +297,7 @@ _edw_build_caged() (
         echo $src_dir
     }
 
-    _edw_get_repo() {
+    _edw_get_src_repo() {
         local proj=$1
         local repo=
         if [ -f build/${proj}/src.url ]; then
@@ -293,20 +330,18 @@ _edw_build_caged() (
     mkdir -p $tmp_name
     # for each project - build docker image
     for proj in "${arr_docker_images[@]}"; do
-        idx=`_edw_get_index $proj ${arr_docker_images[@]}`
-        #echo "${arr_full_docker_images[$idx]}"
-
-        # get source dir and repo to clone; src_dir has priority
-        src_dir=`_edw_get_src_dir $proj`
+        # get source dir and repo to clone; local_src_dir has priority
+        local_src_dir=`_edw_get_src_dir $proj`
+        src_dir=
         docker_src_dir=
-        repo=`_edw_get_repo $proj`
+        repo=`_edw_get_src_repo $proj`
         build_args=()
 
         # we have a local source dir
-        if [ -n "$src_dir" ]; then
+        if [ -n "$local_src_dir" ]; then
             local new_src_dir=$tmp_name/$proj
             mkdir $new_src_dir
-            _edw_copy_local_src "$src_dir" $new_src_dir
+            _edw_copy_local_src "$local_src_dir" $new_src_dir
             src_dir=$new_src_dir
         # we have a repo and not a local source dir overrinding it
         elif [ -n "$repo" ]; then
@@ -326,13 +361,24 @@ _edw_build_caged() (
         if [ $quiet = false ]; then
             echo
             echo -n "[ ${Green}${proj}${White} ] "
-            echo "docker build -t ${arr_full_docker_images[$idx]} ${build_args[@]} -f build/$proj/Dockerfile ."
+            echo "docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile ."
         fi
-        docker build -t ${arr_full_docker_images[$idx]} ${build_args[@]} -f build/$proj/Dockerfile .
+        docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile .
 
         if [ $no_push = false ]; then
-            # TODO git: create tag, push; figure out which repo
-            docker push ${arr_full_docker_images[$idx]}
+            docker push `_edw_full_docker_image -t $tag $proj`
+            _edw_bail_out_if_error
+            if [ -n "$src_dir" ]; then
+                if [ -n "$local_src_dir" ]; then
+                    cd $local_src_dir
+                else
+                    # assert [ -n "$repo" ]
+                    cd $src_dir
+                fi
+                # TODO namespace for git tags? project-name_$tag? docker-repo_$tag?
+                git tag $tag && git push origin $tag
+                cd -
+            fi
         fi
 
     done
@@ -351,6 +397,9 @@ _edw_deploy_caged() (
         echo -e "\tUsage:"
         echo -e "\t-t tag:  images tag to pull from docker.hub or use locally; Default is env \$EDW_BUILD_VER"
         echo -e "\t-n:  no-pull, Do not pull images from docker.hub; assume they are present locally; Default is false"
+        echo -e "\t-s:  no-start, Don't start docker suite after deploy. Use if you want to do additional housekeeping right after deploy. Default is false."
+        echo -e "\t-f:  force, Do deploy even if lock_deploy file is present in target dir. Default is false"
+        echo -e "\t-o:  own, Do deploy even on own machine. Default is false"
         echo -e "\tOther options"
         echo -e "\t-y:  confirmed; Do not ask for user confirmation from stdin; Default is false"
         echo -e "\t-q:  quiet mode; Do not output on stdout; Assume -y; Default is false"
@@ -361,18 +410,28 @@ _edw_deploy_caged() (
     no_pull=false
     quiet=false
     confirmation=
-    only_projects_with_docker=true
+    disregard_deploy_lock=false
+    no_start=false
+    own_machine_deploy=false
     arr_docker_images=()
-    arr_full_docker_images=()
 
 
-    while getopts ":hqynt:" opt; do
+    while getopts ":hqynsfot:" opt; do
         case "$opt" in
             t)
                 tag=$OPTARG
                 ;;
             n)
                 no_pull=true
+                ;;
+            s)
+                no_start=true
+                ;;
+            f)
+                disregard_deploy_lock=true
+                ;;
+            o)
+                own_machine_deploy=true
                 ;;
             q)
                 quiet=true
@@ -409,16 +468,137 @@ _edw_deploy_caged() (
         else
             echo "${Yellow}We shall NOT pull images from docker.hub ${White}"
         fi
-        echo "Building projects ${Green}${arr_docker_images[@]}${White}"
-        # FIXME Porjects without a Dockerfile did not built and are not to be found with arr_full_docker_images
-        # the docker-compose.yml specifies the tags; what to do with that? use env in there too?
-        for proj in "${arr_docker_images[@]}"; do
-            local idx=`_edw_get_index $proj ${arr_docker_images[@]}`
-        done
+
+        if [ "$disregard_deploy_lock" = true ]; then
+            echo "${Red}We shall force deploy disregarding lock_deploy${White}"
+        fi
+
+        if [ "$no_start" = true ]; then
+            echo "${Red}We shall NOT restart docker-compose suite after deploy${White}"
+        else
+            echo "${Yellow}We shall restart docker-compose suite after deploy${White}"
+        fi
+        # TODO we did not include projects without our own image in here...
+        echo "Deploying projects ${Green}${arr_docker_images[@]}${White}"
+
+        if [ "$EDW_DEPLOY_HOST" = localhost ]; then
+            if [ $own_machine_deploy = false ]; then
+                echo "${Green}Deploy target is own machine. Skipping deploy.${White}"
+            else
+                echo "${Yellow}Deploying on own machine${White}"
+            fi
+        fi
+        local current_ver=`ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
+            [ -f current_tag ] && cat current_tag
+            "`
+        echo "Current version on ${Yellow}${EDW_DEPLOY_HOST}:${EDW_DEPLOY_DIR}${White}, if any, is: ${Yellow}${current_ver}${White}"
     }
 
+    go_on=$False
+    if [ "$quiet" = false ]; then
+        _edw_show_run_context -eds "$confirmation"
+        go_on=$?
+    else
+        go_on=$True
+    fi
+    [ $go_on = $False ] && exit 0
+    if [ "$EDW_DEPLOY_HOST" = localhost -a $own_machine_deploy = false ]; then
+        exit 0
+    fi
 
- )
+
+    # create deploy folder if it does not exist. We assume this is inside EDW_DEPLOY_USER path
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null || mkdir -p $EDW_DEPLOY_DIR"
+    _edw_bail_out_if_error
+
+    if [ "$disregard_deploy_lock" = false ]; then
+        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -f lock_deploy ] && cat lock_deploy && exit 100"
+        if [ "$?" = 100 ]; then
+            echo "Stopping deployment due to lock_deploy in $EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+            exit 1
+        fi
+    fi
+
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
+        if [ -f current_tag ]; then \
+            [ -f lock_deploy ] && rm lock_deploy ;\
+            EDW_BUILD_VER=$EDW_BUILD_VER docker-compose stop 2>/dev/null ;\
+            if [ $no_pull = false ]; then \
+                EDW_BUILD_VER=$EDW_BUILD_VER docker-compose rm -f -a -v ;\
+            fi ;\
+        fi ;\
+        }"
+
+    for f in `cat deploy.manifest`; do
+        local dir=`dirname $f`
+        [ -f "$f" ] || exit 1
+        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -d "$dir" ] || mkdir -p $dir"
+        scp $f $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/$f
+        _edw_bail_out_if_error
+    done
+
+    # add the env vars we've been using. remeber to update whatever was overriden by the command line
+    # Do this even if no-pull was used - we are to deploy config to the host even if we don't pull
+    scp $g_env_file $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/.env
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
+        echo >> .env ;\
+        echo EDW_BUILD_VER=$tag >> .env ;\
+        }"
+
+
+    for proj in "${arr_docker_images[@]}"; do
+        local partial_image_name=`_edw_full_docker_image -t\  $proj`
+        local image_name=`_edw_full_docker_image -t $tag $proj`
+
+        if [ $no_pull = false ]; then
+            ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
+                if [ -f current_tag ]; then \
+                    if [ -f old_old_tag ]; then \
+                        docker rmi ${partial_image_name}\`cat old_old_tag\` || true ;\
+                    fi ;\
+                    if [ -f old_tag ]; then \
+                        cp old_tag old_old_tag ;\
+                    fi ;\
+                    cp current_tag old_tag ;\
+                fi ;\
+                docker pull $image_name ;\
+                echo -n $tag > current_tag ;\
+                }"
+        fi
+        _edw_bail_out_if_error
+        # TODO
+        # should apply some init/bare-init scripts here. add some option for bare, init, some other updates?
+        # these are project specific? source something from proj.docker folder here?
+        # execte r-init.sh scripts blindly?
+        # right now just use with -s (no-start) and do this kind of stuff manually
+    done
+
+    if [ "$no_start" = false ]; then
+        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR &&\
+            EDW_BUILD_VER=$EDW_BUILD_VER docker-compose up -d
+            "
+    fi
+
+)
+
+# TODO transform this into _caged and add command line options and help
+_edw_up() {
+    local foreground="$1"
+
+    # Any option you give to this command will be interpreted as "run in foreground"
+    # Leave empty to run in background
+    if [ -z "$foreground" ]; then
+        dettached='-d'
+    else
+        dettached=
+    fi
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && EDW_BUILD_VER=$EDW_BUILD_VER docker-compose up $dettached"
+}
+
+_edw_stop() {
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && EDW_BUILD_VER=$EDW_BUILD_VER docker-compose stop"
+}
+
 
 ## parse main script options 
 
@@ -457,8 +637,15 @@ case "$com" in
         ;;
     deploy)
         _edw_deploy_caged "$@"
+        _edw_bail_out_if_error show_message
+        ;;
+    restore)
+        echo "Not implemented"
+        ;;
+    up)
+        _edw_up "$@"
+        ;;
+    stop)
+        _edw_stop "$@"
         ;;
 esac
-
-
-echo " ..go go go.. "

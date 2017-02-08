@@ -37,6 +37,11 @@ For a docker ochestration one needs:
 In addition some build/deploy specific data is needed, data that will not be stored in repos, like environment
 variables, files containing secrets, etc
 
+This tool is to be ran from the docker repo of specific projects.
+`.env` file (overriddable) will be sourced into his own running environment. This
+environment is set at each invocation and expires afterwards.
+
+
 ## machine structure
 
 From the machine abstraction point of view we have:
@@ -89,3 +94,9 @@ and a sources directories (taken from git or from local folders)
 
 For help run:
 `edwd build -h`
+
+## deploy
+`edwd deploy -h`
+
+## up
+## stop
