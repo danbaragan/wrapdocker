@@ -278,11 +278,11 @@ _edw_build_caged() (
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
         if [ "$no_push" = false ]; then
-            echo "${Red}We shall create git tag and push to docker.hub ($tag)${White}"
+            echo "We shall ${Red}push tags${White} to git and docker.hub (${Yellow}${tag}${White})"
         else
-            echo "${Yellow}We shall NOT create git tag and push to docker.hub ($tag)${White}"
+            echo "We shall ${Red}NOT push tags${White} to git and docker.hub (${Yellow}${tag}${White})"
         fi
-        echo "Building based on git branch/tag: $git_checkout. EDW_<proj_name>_SRC might override this"
+        echo "Building based on git branch/tag: ${Yellow}${git_checkout}${White}. EDW_<proj_name>_SRC might override this"
         echo "Building projects ${Green}${arr_docker_images[@]}${White}"
         for proj in "${arr_docker_images[@]}"; do
             local src_dir=`_edw_get_src_dir $proj`
@@ -363,7 +363,7 @@ _edw_build_caged() (
             build_args+=("--build-arg EDW_SRC_DIR=$src_dir")
         fi
         # add build specific vars
-        for v in `grep EDW_${proj} $g_env_file`; do
+        for v in `grep EDW_${proj}_ $g_env_file`; do
             build_args+=("--build-arg $v")
         done
 
@@ -373,6 +373,9 @@ _edw_build_caged() (
             echo "docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile ."
         fi
         docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile .
+        # This will not be pushed, but used locally by other images that depend on this one
+        docker rmi `_edw_full_docker_image -t latest $proj` 2>/dev/null
+        docker tag `_edw_full_docker_image -t $tag $proj` `_edw_full_docker_image -t latest $proj`
 
         if [ $no_push = false ]; then
             docker push `_edw_full_docker_image -t $tag $proj`
