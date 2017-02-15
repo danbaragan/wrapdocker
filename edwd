@@ -271,7 +271,7 @@ _edw_build_caged() (
     shift $((OPTIND-1))
 
     # only if array not already filled; check only for the presence of first element
-    if [ -z $arr_docker_images ]; then
+    if [ -z "$arr_docker_images" ]; then
         _edw_projects_images
     fi
 
@@ -284,7 +284,7 @@ _edw_build_caged() (
         fi
         echo "Building based on git branch/tag: ${Yellow}${git_checkout}${White}. EDW_<proj_component_name>_SRC will specify the repo"
         echo "Building projects ${Green}${arr_docker_images[@]}${White}"
-        for proj in "${arr_docker_images[@]}"; do
+        for proj in ${arr_docker_images[@]}; do
             local repo=`_edw_get_src_repo $proj`
             if [ -n "$repo" ]; then
                 echo -n "Building ${Green}${proj}${White} from git ${Yellow}${repo}${White}"
@@ -325,7 +325,7 @@ _edw_build_caged() (
     tmp_name=edwd.${PPID}.$$.${RANDOM}
     mkdir -p $tmp_name
     # for each project - build docker image
-    for proj in "${arr_docker_images[@]}"; do
+    for proj in ${arr_docker_images[@]}; do
         # get source repo to clone;
         src_dir=
         repo=`_edw_get_src_repo $proj`
@@ -453,7 +453,7 @@ _edw_deploy_caged() (
 
     shift $((OPTIND-1))
 
-    if [ -z $arr_docker_images ]; then
+    if [ -z "$arr_docker_images" ]; then
         _edw_projects_images
     fi
 
@@ -475,9 +475,9 @@ _edw_deploy_caged() (
             echo "We shall ${Red}restart${White} docker-compose suite after deploy"
         fi
         # TODO we did not include projects without our own image in here, like mysql...
-        for proj in "${arr_docker_images[@]}"; do
+        for proj in ${arr_docker_images[@]}; do
             local image_name=`_edw_full_docker_image -t $tag $proj`
-            echo "${Green}${proj}${White}: $image_name"
+            echo "${Green}${proj}${White}: ${Yellow}${image_name}${White}"
         done
 
         if [ "$EDW_DEPLOY_HOST" = localhost ]; then
@@ -548,7 +548,7 @@ _edw_deploy_caged() (
         }"
 
 
-    for proj in "${arr_docker_images[@]}"; do
+    for proj in ${arr_docker_images[@]}; do
         local partial_image_name=`_edw_full_docker_image -t\  $proj`
         local image_name=`_edw_full_docker_image -t $tag $proj`
 
