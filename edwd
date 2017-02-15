@@ -213,7 +213,7 @@ _edw_build_caged() (
         echo -e "Build a docker image based on current repo dir and variables present in current environment and files in deploy.manifest"
         echo -e "Usage:"
         echo -e "\t-g branch:  git branch/tag to clone before build; Default is master;"
-        echo -e "\t\t EDW_<proj_name>_SRC var can override clonnig and the src files from a local directory"
+        echo -e "\t\t EDW_<proj_component_name>_SRC var will specify the git repo to clone from for each component"
         echo -e "\t-t tag:  tag to push in git AND to create docker image with; Default is env \$EDW_BUILD_VER"
         echo -e "\t-p projects:  Build only the following comma separated (no space) list of projects."
         echo -e "\t-n:  no-push, Do not create git tag AND do not push image to docker.hub; Default is false"
@@ -282,14 +282,11 @@ _edw_build_caged() (
         else
             echo "We shall ${Red}NOT push tags${White} to git and docker.hub (${Yellow}${tag}${White})"
         fi
-        echo "Building based on git branch/tag: ${Yellow}${git_checkout}${White}. EDW_<proj_name>_SRC might override this"
+        echo "Building based on git branch/tag: ${Yellow}${git_checkout}${White}. EDW_<proj_component_name>_SRC will specify the repo"
         echo "Building projects ${Green}${arr_docker_images[@]}${White}"
         for proj in "${arr_docker_images[@]}"; do
-            local src_dir=`_edw_get_src_dir $proj`
             local repo=`_edw_get_src_repo $proj`
-            if [ -n "$src_dir" ]; then
-                echo -n "Building ${Green}${proj}${White} from local dir ${Yellow}${src_dir}${White}"
-            elif [ -n "$repo" ]; then
+            if [ -n "$repo" ]; then
                 echo -n "Building ${Green}${proj}${White} from git ${Yellow}${repo}${White}"
             else
                 echo -n "Building ${Green}${proj}${White} (no source required/specified)"
@@ -299,19 +296,10 @@ _edw_build_caged() (
         done
     }
 
-    _edw_get_src_dir() {
-        local proj=$1
-        local src_dir=`_edw_resolve_interpolated_var $proj _SRC`
-        echo $src_dir
-    }
-
     _edw_get_src_repo() {
         local proj=$1
-        local repo=
-        if [ -f build/${proj}/src.url ]; then
-            read repo <build/${proj}/src.url
-        fi
-        echo $repo
+        local src_repo=`_edw_resolve_interpolated_var $proj _SRC`
+        echo $src_repo
     }
 
     _edw_copy_local_src() {
@@ -338,21 +326,13 @@ _edw_build_caged() (
     mkdir -p $tmp_name
     # for each project - build docker image
     for proj in "${arr_docker_images[@]}"; do
-        # get source dir and repo to clone; local_src_dir has priority
-        local_src_dir=`_edw_get_src_dir $proj`
+        # get source repo to clone;
         src_dir=
-        docker_src_dir=
         repo=`_edw_get_src_repo $proj`
         build_args=()
 
-        # we have a local source dir
-        if [ -n "$local_src_dir" ]; then
-            local new_src_dir=$tmp_name/$proj
-            mkdir $new_src_dir
-            _edw_copy_local_src "$local_src_dir" $new_src_dir
-            src_dir=$new_src_dir
-        # we have a repo and not a local source dir overrinding it
-        elif [ -n "$repo" ]; then
+        # we have a repo to get specific sources from
+        if [ -n "$repo" ]; then
             cd $tmp_name
             git clone --depth 1 --branch ${git_checkout} --single-branch $repo $proj &&\
                 src_dir=${tmp_name}/${proj}
@@ -381,9 +361,7 @@ _edw_build_caged() (
             docker push `_edw_full_docker_image -t $tag $proj`
             _edw_bail_out_if_error
             if [ -n "$src_dir" ]; then
-                if [ -n "$local_src_dir" ]; then
-                    cd $local_src_dir
-                else
+                if [ -n "$src_dir" ]; then
                     # assert [ -n "$repo" ]
                     cd $src_dir
                 fi
@@ -407,7 +385,7 @@ _edw_deploy_caged() (
     _edw_help() {
         echo -e "Deploy project based own images from docker.hub and deployment files from this directory"
         echo -e "\tUsage:"
-        echo -e "\t-t tag:  images tag to pull from docker.hub or use locally; Default is \$EDW_BUILD_VER"
+        echo -e "\t-t tag:  images tag to pull from docker.hub; Default is \$EDW_BUILD_VER"
         echo -e "\t-p projects:  Build only the following comma separated list (no space) of projects."
         echo -e "\t-n:  no-pull, Do not pull images from docker.hub; assume they are present locally; Default is false"
         echo -e "\t-s:  no-start, Don't start docker suite after deploy. Use if you want to do additional housekeeping right after deploy. Default is false."
@@ -482,28 +460,32 @@ _edw_deploy_caged() (
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
         if [ "$no_pull" = false ]; then
-            echo "${Yellow}We shall pull images from docker.hub ($tag)${White}"
+            echo "We shall ${Red}pull images${White} from docker.hub (${Yellow}$tag${White})"
         else
-            echo "${Yellow}We shall NOT pull images from docker.hub ${White}"
+            echo "${Yellow}We shall ${Red}NOT pull images${White} from docker.hub"
         fi
 
         if [ "$disregard_deploy_lock" = true ]; then
-            echo "${Red}We shall force deploy disregarding lock_deploy${White}"
+            echo "We shall ${Red}force deploy${White}. Disregarding ${Yellow}lock_deploy${White} if present on host"
         fi
 
         if [ "$no_start" = true ]; then
-            echo "${Red}We shall NOT restart docker-compose suite after deploy${White}"
+            echo "We shall ${Red}NOT restart${White} docker-compose suite after deploy"
         else
-            echo "${Yellow}We shall restart docker-compose suite after deploy${White}"
+            echo "We shall ${Red}restart${White} docker-compose suite after deploy"
         fi
-        # TODO we did not include projects without our own image in here...
-        echo "Deploying projects ${Green}${arr_docker_images[@]}${White}"
+        # TODO we did not include projects without our own image in here, like mysql...
+        for proj in "${arr_docker_images[@]}"; do
+            local image_name=`_edw_full_docker_image -t $tag $proj`
+            echo "${Green}${proj}${White}: $image_name"
+        done
 
         if [ "$EDW_DEPLOY_HOST" = localhost ]; then
-            if [ $own_machine_deploy = false ]; then
-                echo "${Green}Deploy target is own machine. Skipping deploy.${White}"
+            echo -n "Deploy target is ${Yellow}own machine${White}. "
+            if [ $own_machine_deploy = true ]; then
+                echo "${Red}Doing deploy${White} anyway."
             else
-                echo "${Yellow}Deploying on own machine${White}"
+                echo "${Yellow}Skipping deploying${White}."
             fi
         fi
         local current_ver=`ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
