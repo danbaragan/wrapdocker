@@ -354,8 +354,13 @@ _edw_build_caged() (
         fi
         docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile .
         # This will not be pushed, but used locally by other images that depend on this one
-        docker rmi `_edw_full_docker_image -t latest $proj` 2>/dev/null
-        docker tag `_edw_full_docker_image -t $tag $proj` `_edw_full_docker_image -t latest $proj`
+        local prev_img_id=$(docker images $(_edw_full_docker_image -t latest $proj) -q)
+        local current_img_id=$(docker images $(_edw_full_docker_image -t $tag $proj) -q)
+        if [ "$prev_img_id" != "$current_img_id" ]; then
+            # -f to delete both the version tag and latest tag
+            docker rmi -f $prev_img_id 2>/dev/null
+            docker tag `_edw_full_docker_image -t $tag $proj` `_edw_full_docker_image -t latest $proj`
+        fi
 
         if [ $no_push = false ]; then
             docker push `_edw_full_docker_image -t $tag $proj`
@@ -521,12 +526,13 @@ _edw_deploy_caged() (
         fi
     fi
 
+    # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
     ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
         if [ -f current_tag ]; then \
             [ -f lock_deploy ] && rm lock_deploy ;\
             EDW_BUILD_VER=$EDW_BUILD_VER docker-compose stop 2>/dev/null ;\
             if [ $no_pull = false ]; then \
-                EDW_BUILD_VER=$EDW_BUILD_VER docker-compose rm -f -a -v ;\
+                EDW_BUILD_VER=$EDW_BUILD_VER docker-compose rm -f -v ;\
             fi ;\
         fi ;\
         }"
