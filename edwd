@@ -203,6 +203,7 @@ cmds=(
 "log"
 "up"
 "stop"
+"show_context"
 )
 
 _edw_help() {
@@ -782,5 +783,8 @@ case "$com" in
         ;;
     stop)
         _edw_stop "$@"
+        ;;
+    show_context)
+        _edw_show_run_context -edy
         ;;
 esac
