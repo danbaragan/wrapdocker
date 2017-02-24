@@ -637,12 +637,14 @@ _edw_attach() {
         echo "Attach to the container corresponding to the given service; by default 'web'"
         echo "ctrl+p, ctrl+q to detach without killing the container"
         echo
+        echo "Note that containers not originating from our Dockerfiles will not have the label name=service and we can't identify those."
+        echo
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
     local service=${1:-web}
-    local id=`_edw_id_by_service $service`
-    ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $id"
+    local container_id=`_edw_id_by_service $service`
+    ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $container_id"
 }
 
 _edw_debug() {
@@ -678,6 +680,8 @@ _edw_log() {
     if [ "$1" = '-h' ]; then
         echo "Attach to the stream of logs of the container corresponding to the given service; by default 'web'"
         echo "ctrl+c to exit"
+        echo
+        echo "Note that containers not originating from our Dockerfiles will not have the label name=service and we can't identify those."
         echo
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
