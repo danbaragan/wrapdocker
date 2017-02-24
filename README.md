@@ -14,12 +14,11 @@ see structure
 
 # Requirements
 
-bash >= 3.2
-docker >= 1.10 (for builds)
-docker-compose >= 1.8
-
-git
-ssh
+- bash >= 3.2
+- docker >= 1.10 (for builds)
+- docker-compose >= 1.8
+- git
+- ssh
 
 
 # Installation
