@@ -79,6 +79,7 @@ _edw_bail_out_if_error() {
         exit 1
     fi
 }
+
 _edw_show_run_context() {
     OPTIND=1
     local confirmation=
@@ -186,7 +187,23 @@ _edw_projects_images() {
     cd - >/dev/null
 }
 
+_edw_id_by_service() {
+    local id=`ssh $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST docker ps -q -f label=name=$1`
+    echo $id
+}
+
 ## Commands
+
+cmds=(
+"attach"
+"build"
+"debug"
+"deploy"
+"lockdown"
+"log"
+"up"
+"stop"
+)
 
 _edw_help() {
     echo -e "Docker wrapper for various edw projects"
@@ -194,8 +211,13 @@ _edw_help() {
     echo -e "taking into consideration the variables from the current directory"
     echo -e "Usage: edwd [options] command [command options]"
     echo -e "\t-e <env file>:  Source env vars from this file into edwd machinery; default is .env; don't export the vars, they are meant to live only inside this script."
-    echo -e "\tOther options"
+    echo -e "Other options"
     echo -e "\t-h:  Show this help"
+    echo
+    echo -e "Commands (edwd command -h for help):"
+    for c in ${cmds[@]}; do
+        echo -e "\t$c"
+    done
 }
 
 _edw_commands() {
@@ -610,7 +632,41 @@ _edw_deploy_caged() (
 
 )
 
+_edw_attach() {
+    if [ "$1" = '-h' ]; then
+        echo "Attach to the container corresponding to the given service; by default 'web'"
+        echo "ctrl+p, ctrl+q to detach without killing the container"
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
+    local service=${1:-web}
+    local id=`_edw_id_by_service $service`
+    ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $id"
+}
+
+_edw_debug() {
+    if [ "$1" = '-h' ]; then
+        echo "Bring the docker suite up. and attach to the given container. By default 'web'"
+        echo "Make sure that the targeted service is started with tty and stdin_open so you can interact with the container"
+        echo "The purpose of this is to use an interactive debugger placed in the code of the container."
+        echo "ctrl+p, ctrl+q to detach without killing the container"
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
+    _edw_up
+    _edw_attach "$@"
+}
+
 _edw_lockdown_deploy() {
+    if [ "$1" = '-h' ]; then
+        echo "Put a lock on the Host machine to prevent edwd deploy from acting there"
+        echo "edwd deploy -f will ignore this lock and also lift the lockdown"
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
     if [ -z "$1" ]; then
         echo "You must provide a reason for lockdown!"
         exit 1
@@ -618,8 +674,28 @@ _edw_lockdown_deploy() {
     ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && echo \'$1\' > lockdown_deploy"
 }
 
+_edw_log() {
+    if [ "$1" = '-h' ]; then
+        echo "Attach to the stream of logs of the container corresponding to the given service; by default 'web'"
+        echo "ctrl+c to exit"
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
+    local service=${1:-web}
+    local container_id=`_edw_id_by_service $service`
+    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker logs -f --tail=200 $container_id"
+}
+
 # TODO transform this into _caged and add command line options and help
 _edw_up() {
+    if [ "$1" = '-h' ]; then
+        echo "Bring the docker suite up. By default in background."
+        echo "Use edwd up -f to bring it in foreground"
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
     local foreground="$1"
 
     # Any option you give to this command will be interpreted as "run in foreground"
@@ -633,6 +709,12 @@ _edw_up() {
 }
 
 _edw_stop() {
+    if [ "$1" = '-h' ]; then
+        echo "Stop the docker suite."
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
+        exit 0
+    fi
     ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs < .env\` docker-compose stop"
 }
 
@@ -669,18 +751,27 @@ _edw_set_env $g_env_file
 com=$1
 shift
 case "$com" in
+    attach)
+        _edw_attach "$@"
+        ;;
     build)
         _edw_build_caged "$@"
+        ;;
+    debug)
+        _edw_debug "$@"
         ;;
     deploy)
         _edw_deploy_caged "$@"
         _edw_bail_out_if_error show_message
         ;;
-    revert)
-        echo "Not implemented"
-        ;;
     lockdown)
         _edw_lockdown_deploy "$@"
+        ;;
+    log)
+        _edw_log "$@"
+        ;;
+    revert)
+        echo "Not implemented"
         ;;
     up)
         _edw_up "$@"
