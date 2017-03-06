@@ -188,7 +188,11 @@ _edw_projects_images() {
 }
 
 _edw_id_by_service() {
-    local id=`ssh $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST docker ps -q -f label=name=$1`
+    local include_stopped=
+    if [ -n "$2" ]; then
+        include_stopped="-a"
+    fi
+    local id=`ssh $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST docker ps "$include_stopped" -q -f label=name=$1`
     echo $id
 }
 
@@ -710,7 +714,7 @@ _edw_log() {
         exit 0
     fi
     local service=${1:-web}
-    local container_id=`_edw_id_by_service $service`
+    local container_id=`_edw_id_by_service $service include_stopped`
     ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker logs -f --tail=200 $container_id"
 }
 
