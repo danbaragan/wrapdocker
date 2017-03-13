@@ -253,6 +253,7 @@ _edw_build_caged() (
 }
     
     tag=$EDW_BUILD_VER
+    git_tag=${EDW_BUILD_PROJECT}.docker_${tag}
     no_push=false
     quiet=false
     confirmation=
@@ -300,9 +301,9 @@ _edw_build_caged() (
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
         if [ "$no_push" = false ]; then
-            echo "We shall ${Red}push tags${White} to git and docker.hub (${Yellow}${tag}${White})"
+            echo "We shall ${Red}push tags${White} to git (${Yellow}${git_tag}${White}) and docker.hub (${Yellow}${tag}${White})"
         else
-            echo "We shall ${Red}NOT push tags${White} to git and docker.hub (${Yellow}${tag}${White})"
+            echo "We shall ${Red}NOT push tags${White} to git (${Yellow}${git_tag}${White}) and docker.hub (${Yellow}${tag}${White})"
         fi
         echo "Building projects ${Green}${arr_docker_images[@]}${White}"
         for proj in ${arr_docker_images[@]}; do
@@ -353,7 +354,6 @@ _edw_build_caged() (
     fi
     [ $go_on = $False ] && exit 0
 
-    # TODO veryfy this on windows
     tmp_name=edwd.${PPID}.$$.${RANDOM}
     mkdir -p $tmp_name
     # for each project - build docker image
@@ -403,8 +403,7 @@ _edw_build_caged() (
             if [ -n "$src_dir" ]; then
                 # assert [ -n "$repo" ]
                 cd $src_dir
-                # TODO namespace for git tags? project-name_$tag? docker-repo_$tag?
-                git tag $tag && git push origin $tag
+                git tag ${git_tag} && git push origin ${git_tag}
                 cd -
             fi
         fi
@@ -491,19 +490,19 @@ _edw_deploy_caged() (
         _edw_projects_images
     fi
 
-    local current_ver=`ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f current_tag ] && cat current_tag"`
-    local old_ver=`ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f old_tag ] && cat old_tag"`
-    local old_old_ver=`ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f old_old_tag ] && cat old_old_tag"`
+    local current_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
+        [ -f current_tag ] && cat current_tag" 2>/dev/null`
+    local old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
+        [ -f old_tag ] && cat old_tag" 2>/dev/null`
+    local old_old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
+        [ -f old_old_tag ] && cat old_old_tag" 2>/dev/null`
 
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
         if [ "$no_pull" = false ]; then
             echo "We shall ${Red}pull${White} images from docker.hub (${Yellow}$tag${White})"
         else
-            echo "We shall ${Red}NOT pull images${White} from docker.hub"
+            echo "We shall ${Red}NOT pull${White} images from docker.hub"
         fi
 
         if [ "$disregard_deploy_lock" = true ]; then
@@ -515,7 +514,6 @@ _edw_deploy_caged() (
         else
             echo "We shall ${Red}restart${White} docker-compose suite after deploy"
         fi
-        # TODO we did not include projects without our own image in here, like mysql...
         for proj in ${arr_docker_images[@]}; do
             local image_name=`_edw_full_docker_image -t $tag $proj`
             echo "${Green}${proj}${White}: ${Yellow}${image_name}${White}"
@@ -574,13 +572,16 @@ _edw_deploy_caged() (
         if [ -f $f ]; then
             scp $f $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/$f
         elif [ -d $f ]; then
-            ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -d "$dir" ] || mkdir $f"
+            ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -d "${dir}/${f}" ] || mkdir $f"
+        # always turn absolute paths into dirs
+        elif [[ $f == /* ]]; then
+            ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -d "$f" ] || mkdir $f"
         fi
         _edw_bail_out_if_error
     done
 
     # add the env vars we've been using. remeber to update whatever was overriden by the command line
-    # Do this even if no-pull was used - we are to deploy config to the host even if we don't pull
+    # Do this even if no_pull was used - we are to deploy config to the host even if we don't pull
     scp $g_env_file $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/.env
 
     # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
@@ -722,6 +723,8 @@ _edw_rm() {
     if [ "$1" = '-h' ]; then
         echo "edwd rm - Remove all containers and anonymous volumes (named volumes are kept)"
         echo "Also stops the suite."
+        echo
+        echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
     ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs <.env\` docker-compose stop && docker-compose rm -v -f"
@@ -749,7 +752,6 @@ _edw_run() {
 
 }
 
-# TODO transform this into _caged and add command line options and help
 _edw_up() {
     if [ "$1" = '-h' ]; then
         echo "Bring the docker suite up. By default in background."
