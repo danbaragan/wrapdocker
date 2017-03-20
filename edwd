@@ -781,7 +781,7 @@ _edw_stop() {
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs < .env\` docker-compose stop"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs < .env\` docker-compose stop $@"
 }
 
 
