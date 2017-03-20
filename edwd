@@ -422,7 +422,7 @@ _edw_deploy_caged() (
     _edw_help() {
         echo -e "Deploy project based images from docker.hub and deployment files from deploy.manifest"
         echo -e "\tUsage:"
-        echo -e "\t-p projects:  Build only the following comma separated list (no space) of projects."
+        echo -e "\t-p projects:  Deploy only the following comma separated list (no space) of projects."
         echo -e "\t-n:  no-pull, Do not pull images from docker.hub; assume they are present locally; Default is false"
         echo -e "\t-s:  no-start, Don't start docker suite after deploy. Use if you want to do additional housekeeping right after deploy. Default is false."
         echo -e "\t-f:  force, Do deploy even if lockdown_deploy file is present in target dir. Default is false"
@@ -490,12 +490,14 @@ _edw_deploy_caged() (
         _edw_projects_images
     fi
 
+    # TODO Redo this based only on grep -e'^EDW_BUILD_VER' .env|sed -e's/EDW_BUILD_VER=\(.*\)$/\1/' for current ver
+    # and docker tags for latest and old, similar to how build deletes previous image, but keeping 2 latest images
     local current_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f current_tag ] && cat current_tag" 2>/dev/null`
+        [ -f .current_tag ] && cat .current_tag" 2>/dev/null`
     local old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f old_tag ] && cat old_tag" 2>/dev/null`
+        [ -f .old_tag ] && cat .old_tag" 2>/dev/null`
     local old_old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f old_old_tag ] && cat old_old_tag" 2>/dev/null`
+        [ -f .old_old_tag ] && cat .old_old_tag" 2>/dev/null`
 
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
@@ -585,15 +587,15 @@ _edw_deploy_caged() (
     scp $g_env_file $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/.env
 
     # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
-        if [ -f current_tag ]; then \
+    if [ -n "$current_ver" ]; then
+        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
             [ -f lockdown_deploy ] && rm lockdown_deploy ;\
             env \`xargs <.env\` docker-compose stop 2>/dev/null ;\
             if [ $no_pull = false ]; then \
                 env \`xargs <.env\` docker-compose rm -f -v ;\
             fi ;\
-        fi ;\
-        }"
+            }"
+    fi
 
 
     for proj in ${arr_docker_images[@]}; do
@@ -604,7 +606,7 @@ _edw_deploy_caged() (
         if [ $no_pull = false ]; then
             ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
                 docker pull $image_name ;\
-                if [ -f old_old_tag ] && [ \"$old_old_ver\" != $tag ] && [ \"$old_old_ver\" != \"$old_ver\" ]; then \
+                if [ -f .old_old_tag ] && [ \"$old_old_ver\" != $tag ] && [ \"$old_old_ver\" != \"$old_ver\" ]; then \
                     docker rmi ${partial_image_name}${old_old_ver} || true ;\
                 fi ;\
                 }"
@@ -621,13 +623,13 @@ _edw_deploy_caged() (
     # set the tag history right
     if [ $no_pull = false ]; then
         ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
-            if [ -f current_tag ]; then \
-                if [ -f old_tag ]; then \
-                    cp old_tag old_old_tag ;\
+            if [ -f .current_tag ]; then \
+                if [ -f .old_tag ]; then \
+                    cp .old_tag .old_old_tag ;\
                 fi ;\
-                cp current_tag old_tag ;\
+                cp .current_tag .old_tag ;\
             fi ;\
-            echo -n $tag > current_tag ;\
+            echo -n $tag > .current_tag ;\
         }"
     fi
 
@@ -721,7 +723,7 @@ _edw_log() {
 
 _edw_rm() {
     if [ "$1" = '-h' ]; then
-        echo "edwd rm - Remove all containers and anonymous volumes (named volumes are kept)"
+        echo "Remove all containers and anonymous volumes (named volumes are kept)"
         echo "Also stops the suite."
         echo
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
@@ -836,9 +838,6 @@ case "$com" in
         ;;
     log)
         _edw_log "$@"
-        ;;
-    revert)
-        echo "Not implemented"
         ;;
     rm)
         _edw_rm "$@"
