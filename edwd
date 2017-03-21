@@ -92,11 +92,11 @@ _edw_show_run_context() {
     # -d show deploy manifest
     # -s show command specific info
     # -y don't ask for confirmation; assume confirmation
-    while getopts ":edys" opt; do
+    while getopts ":e:dys" opt; do
         case "$opt" in
             e)
                 echo -e "\n${Yellow}Running eviroment vars:${White}"
-                env |grep -e'^EDW_' |sort
+                env |grep -e"^${OPTARG}" |sort
                 ;;
             d)
                 echo -e "\n${Yellow}Using files manifested in deploy.manifest:"
@@ -347,7 +347,7 @@ _edw_build_caged() (
     
     go_on=$False
     if [ "$quiet" = false ]; then
-        _edw_show_run_context -es "$confirmation"
+        _edw_show_run_context -e EDW_BUILD_ -s "$confirmation"
         go_on=$?
     else
         go_on=$True
@@ -536,7 +536,8 @@ _edw_deploy_caged() (
 
     go_on=$False
     if [ "$quiet" = false ]; then
-        _edw_show_run_context -eds "$confirmation"
+        # show all env vars here as they will all end up on Host machine
+        _edw_show_run_context -e EDW_ -ds "$confirmation"
         go_on=$?
     else
         go_on=$True
@@ -587,12 +588,13 @@ _edw_deploy_caged() (
     scp $g_env_file $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/.env
 
     # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
+    # FIXME Why arem't we stopping docker suite if no_pull?!?
     if [ -n "$current_ver" ]; then
         ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
             [ -f lockdown_deploy ] && rm lockdown_deploy ;\
-            env \`xargs <.env\` docker-compose stop 2>/dev/null ;\
+            env `grep -v '^#' .env|xargs` docker-compose stop 2>/dev/null ;\
             if [ $no_pull = false ]; then \
-                env \`xargs <.env\` docker-compose rm -f -v ;\
+                env `grep -v '^#' .env|xargs` docker-compose rm -f -v ;\
             fi ;\
             }"
     fi
@@ -688,7 +690,7 @@ _edw_exec() {
     fi
     local service=${1:-web}
     local command=${2:-bash}
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs <.env\` docker-compose exec $user_opt $service $command"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose exec $user_opt $service $command"
 
 }
 _edw_lockdown_deploy() {
@@ -703,7 +705,8 @@ _edw_lockdown_deploy() {
         echo "You must provide a reason for lockdown!"
         exit 1
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && echo \'$1\' > lockdown_deploy"
+    # echo is safe no matter what we have in the variable
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && echo $1 > lockdown_deploy"
 }
 
 _edw_log() {
@@ -729,7 +732,7 @@ _edw_rm() {
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
-    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs <.env\` docker-compose stop && docker-compose rm -v -f"
+    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose stop && docker-compose rm -v -f"
 }
 # But please note that in case of images that chage user in the entrypoint
 # rather than in the Dockerfile - the user will be changed by the entrypoint;
@@ -750,7 +753,7 @@ _edw_run() {
     fi
     local service=${1:-web}
     local command=${2:-bash}
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs <.env\` docker-compose run --rm $user_opt $service $command"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose run --rm $user_opt $service $command"
 
 }
 
@@ -771,7 +774,7 @@ _edw_up() {
     else
         dettached=
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs < .env\` docker-compose up $dettached"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose up $dettached"
 }
 
 _edw_stop() {
@@ -781,7 +784,7 @@ _edw_stop() {
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`xargs < .env\` docker-compose stop $@"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose stop $@"
 }
 
 
@@ -852,6 +855,6 @@ case "$com" in
         _edw_stop "$@"
         ;;
     show_context)
-        _edw_show_run_context -edy
+        _edw_show_run_context -e EDW_ -dy
         ;;
 esac
