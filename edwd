@@ -825,6 +825,14 @@ if [ $? = 0 ]; then
     echo "Exiting..."
     exit 1
 fi
+
+if [ ! -f "$g_env_file" ]; then
+    echo "Can't find env file (you asked for the following to be used: ${Yellow}$g_env_file${White})"
+    echo "You must ${Red}have${White} (and ${Red}point${White}) to an env file."
+    echo "See ${Yellow}`basename $0` -h${White} for help"
+    echo "Exiting..."
+    exit 1
+fi
 _edw_set_env $g_env_file
 
 ## Run command
