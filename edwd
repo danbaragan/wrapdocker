@@ -196,6 +196,10 @@ _edw_id_by_service() {
     echo $id
 }
 
+_edw_name_by_service() {
+    echo ${EDW_DEPLOY_COMPOSE_PREFIX}_${1}_1
+}
+
 ## Commands
 
 cmds=(
@@ -389,8 +393,8 @@ _edw_build_caged() (
         docker build -t `_edw_full_docker_image -t $tag $proj` ${build_args[@]} -f build/$proj/Dockerfile .
         local push_ok=$?
 
-        local prev_img_id=$(docker images $(_edw_full_docker_image -t latest $proj) -q)
-        local current_img_id=$(docker images $(_edw_full_docker_image -t $tag $proj) -q)
+        local prev_img_id=$(docker images -q $(_edw_full_docker_image -t latest $proj))
+        local current_img_id=$(docker images -q $(_edw_full_docker_image -t $tag $proj))
         if [ "$prev_img_id" != "$current_img_id" ]; then
             # -f to delete both the version tag and latest tag
             docker rmi -f $prev_img_id 2>/dev/null
@@ -496,8 +500,6 @@ _edw_deploy_caged() (
         [ -f .current_tag ] && cat .current_tag" 2>/dev/null`
     local old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
         [ -f .old_tag ] && cat .old_tag" 2>/dev/null`
-    local old_old_ver=`ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR 2>/dev/null &&\
-        [ -f .old_old_tag ] && cat .old_old_tag" 2>/dev/null`
 
     # define this before calling _edw_show_run_context
     _edw_command_specific_show_run_context() {
@@ -569,6 +571,18 @@ _edw_deploy_caged() (
 
     _edw_project_specific_pre
 
+    # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
+    if [ -n "$current_ver" ]; then
+        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
+            . source-env.sh ;\
+            [ -f lockdown_deploy ] && rm lockdown_deploy ;\
+            docker-compose stop 2>/dev/null ;\
+            if [ $no_pull = false ]; then \
+                docker-compose rm -f -v ;\
+            fi ;\
+            }"
+    fi
+
     for f in `cat deploy.manifest`; do
         local dir=`dirname $f`
         ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && [ -d "$dir" ] || mkdir -p $dir"
@@ -587,29 +601,23 @@ _edw_deploy_caged() (
     # Do this even if no_pull was used - we are to deploy config to the host even if we don't pull
     scp $g_env_file $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR/.env
 
-    # docker-compose rm -v will only remove unnamed modules (unlike docker-compose down -v)
-    # FIXME Why arem't we stopping docker suite if no_pull?!?
-    if [ -n "$current_ver" ]; then
-        ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
-            [ -f lockdown_deploy ] && rm lockdown_deploy ;\
-            env `grep -v '^#' .env|xargs` docker-compose stop 2>/dev/null ;\
-            if [ $no_pull = false ]; then \
-                env `grep -v '^#' .env|xargs` docker-compose rm -f -v ;\
-            fi ;\
-            }"
-    fi
-
-
     for proj in ${arr_docker_images[@]}; do
         local partial_image_name=`_edw_full_docker_image -t\  $proj`
         local image_name=`_edw_full_docker_image -t $tag $proj`
 
+        # make sure we don't remove the image id we have just downloaded
         # make sure you don't remove the imediate previous image - we need it for revert
+        # make sure we remove older docker tag aliases though, otherwise they will hang for a long time
         if [ $no_pull = false ]; then
             ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
                 docker pull $image_name ;\
-                if [ -f .old_old_tag ] && [ \"$old_old_ver\" != $tag ] && [ \"$old_old_ver\" != \"$old_ver\" ]; then \
-                    docker rmi ${partial_image_name}${old_old_ver} || true ;\
+                old_old_img=\`docker images -q ${partial_image_name}${old_ver}\` ;\
+                old_img=\`docker images -q ${partial_image_name}${current_ver}\` ;\
+                current_img=\`docker images -q $image_name\` ;\
+                if [ -n \"\$old_old_img\" ] && [ \"\$old_old_img\" != \$current_img ] && [ \"\$old_old_img\" != \"\$old_img\" ]; then \
+                    docker rmi -f \$old_old_img || true ;\
+                elif [ -n "$old_ver" ] && [ "$old_ver" != "$tag" ]; then \
+                    docker rmi ${partial_image_name}${old_ver} || true ;\
                 fi ;\
                 }"
         fi
@@ -626,9 +634,6 @@ _edw_deploy_caged() (
     if [ $no_pull = false ]; then
         ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && { \
             if [ -f .current_tag ]; then \
-                if [ -f .old_tag ]; then \
-                    cp .old_tag .old_old_tag ;\
-                fi ;\
                 cp .current_tag .old_tag ;\
             fi ;\
             echo -n $tag > .current_tag ;\
@@ -656,8 +661,8 @@ _edw_attach() {
         exit 0
     fi
     local service=${1:-web}
-    local container_id=`_edw_id_by_service $service`
-    ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $container_id"
+    local container_name=`_edw_name_by_service $service`
+    ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $container_name"
 }
 
 _edw_debug() {
@@ -690,7 +695,7 @@ _edw_exec() {
     fi
     local service=${1:-web}
     local command=${2:-bash}
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose exec $user_opt $service $command"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`grep -v '^#' .env|xargs\` docker-compose exec $user_opt $service $command"
 
 }
 _edw_lockdown_deploy() {
@@ -720,8 +725,8 @@ _edw_log() {
         exit 0
     fi
     local service=${1:-web}
-    local container_id=`_edw_id_by_service $service include_stopped`
-    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker logs -f --tail=200 $container_id"
+    local container_name=`_edw_name_by_service $service`
+    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker logs -f --tail=200 $container_name"
 }
 
 _edw_rm() {
@@ -732,7 +737,7 @@ _edw_rm() {
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
-    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose stop && docker-compose rm -v -f"
+    ssh -q $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`grep -v '^#' .env|xargs\` docker-compose stop && docker-compose rm -v -f"
 }
 # But please note that in case of images that chage user in the entrypoint
 # rather than in the Dockerfile - the user will be changed by the entrypoint;
@@ -753,7 +758,7 @@ _edw_run() {
     fi
     local service=${1:-web}
     local command=${2:-bash}
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose run --rm $user_opt $service $command"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`grep -v '^#' .env|xargs\` docker-compose run --rm $user_opt $service $command"
 
 }
 
@@ -774,7 +779,7 @@ _edw_up() {
     else
         dettached=
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose up $dettached"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`grep -v '^#' .env|xargs\` docker-compose up $dettached"
 }
 
 _edw_stop() {
@@ -784,7 +789,7 @@ _edw_stop() {
         echo "Act on $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST:$EDW_DEPLOY_DIR"
         exit 0
     fi
-    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env `grep -v '^#' .env|xargs` docker-compose stop $@"
+    ssh -q -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "cd $EDW_DEPLOY_DIR && env \`grep -v '^#' .env|xargs\` docker-compose stop $@"
 }
 
 
