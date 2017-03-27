@@ -430,7 +430,7 @@ _edw_deploy_caged() (
         echo -e "\t-n:  no-pull, Do not pull images from docker.hub; assume they are present locally; Default is false"
         echo -e "\t-s:  no-start, Don't start docker suite after deploy. Use if you want to do additional housekeeping right after deploy. Default is false."
         echo -e "\t-f:  force, Do deploy even if lockdown_deploy file is present in target dir. Default is false"
-        echo -e "\t-o:  own, Do deploy even on own machine. Default is false"
+        echo -e "\t-l:  local, Do deploy even on own machine. Default is false"
         echo -e "Other options"
         echo -e "\t-y:  confirmed; Do not ask for user confirmation from stdin; Default is false"
         echo -e "\t-q:  quiet mode; Do not output on stdout; Assume -y; Default is false"
@@ -443,11 +443,11 @@ _edw_deploy_caged() (
     confirmation=
     disregard_deploy_lock=false
     no_start=false
-    own_machine_deploy=false
+    local_machine_deploy=false
     arr_docker_images=()
 
 
-    while getopts ":hqynsfop:" opt; do
+    while getopts ":hqynsflp:" opt; do
         case "$opt" in
             p)
                 IFS=',' read -a arr_docker_images <<<$OPTARG
@@ -461,8 +461,8 @@ _edw_deploy_caged() (
             f)
                 disregard_deploy_lock=true
                 ;;
-            o)
-                own_machine_deploy=true
+            l)
+                local_machine_deploy=true
                 ;;
             q)
                 quiet=true
@@ -525,7 +525,7 @@ _edw_deploy_caged() (
 
         if [ "$EDW_DEPLOY_HOST" = localhost ]; then
             echo -n "Deploy target is ${Yellow}own machine${White}. "
-            if [ $own_machine_deploy = true ]; then
+            if [ $local_machine_deploy = true ]; then
                 echo "${Red}Doing deploy${White} anyway."
             else
                 echo "${Yellow}Skipping deploy${White}."
@@ -545,7 +545,7 @@ _edw_deploy_caged() (
         go_on=$True
     fi
     [ $go_on = $False ] && exit 0
-    if [ "$EDW_DEPLOY_HOST" = localhost -a $own_machine_deploy = false ]; then
+    if [ "$EDW_DEPLOY_HOST" = localhost -a $local_machine_deploy = false ]; then
         exit 0
     fi
 
