@@ -818,6 +818,13 @@ while getopts ":he:" opt; do
 done
 shift $((OPTIND-1))
 
+env|grep -q -e'^EDW_.*='
+if [ $? = 0 ]; then
+    echo "You ${Red}already have EDW_ vars${White} in your environment."
+    echo "Please run this tool from a ${Yellow}clean environment${White}."
+    echo "Exiting..."
+    exit 1
+fi
 _edw_set_env $g_env_file
 
 ## Run command
