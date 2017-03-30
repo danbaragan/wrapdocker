@@ -314,8 +314,10 @@ _edw_build_caged() (
             local repo=`_edw_get_src_repo $proj`
             local branch_or_tag=`_edw_get_src_brach_or_tag $proj`
             local branch_or_tag=${branch_or_tag:-master}
-            if [ -n "$repo" ]; then
-                echo -n "Building ${Green}${proj}${White} from git ${Yellow}${repo}${White} branch ${Yellow}${branch_or_tag}${White}"
+            if [[ -n "$repo" && "$repo" == \/* ]]; then
+                echo -n "Building ${Green}${proj}${White} from ${Red}local dir${White} ${Yellow}${repo}${White}"
+            elif [ -n "$repo" ]; then
+                echo -n "Building ${Green}${proj}${White} from ${Red}git${White} ${Yellow}${repo}${White} branch ${Yellow}${branch_or_tag}${White}"
             else
                 echo -n "Building ${Green}${proj}${White} (no source required/specified)"
             fi
@@ -336,14 +338,15 @@ _edw_build_caged() (
         local proj=$1
         local src_repo_and_branch=`_edw_resolve_build_interpolated_var $proj _SRC`
         local branch_or_tag=${src_repo_and_branch##*,}
-        echo ${branch_or_tag##branch_or_tag=}
+        [[ "$branch_or_tag" == \branch_or_tag=* ]] && echo ${branch_or_tag##branch_or_tag=}
     }
 
     _edw_copy_local_src() {
         local src=$1
         local dest=$2
+        [ -d $dest ] || mkdir -p $dest
         for f in `ls -a $src/`; do
-            [ "$f" = .git -o "$f" = . -o "$f" = .. ] && continue
+            [ $f = .git -o $f = .idea -o $f = node_modules -o $f = db.sqlite3 -o $f = . -o $f = .. ] && continue
             # TODO what to do with symlinks? copy them as are and let docker daemon default behaviour kick in 
             cp -R $src/$f $dest/
         done
@@ -368,6 +371,14 @@ _edw_build_caged() (
         branch_or_tag=`_edw_get_src_brach_or_tag $proj`
         branch_or_tag=${branch_or_tag:-master}
         build_args=()
+
+        # get src from local dir, not git repo
+        # need to copy this in current folder else docker daemon won't receive the proper build context
+        if [[ -n "$repo" && "$repo" == \/* ]]; then
+            _edw_copy_local_src $repo $tmp_name/$proj
+            src_dir=$tmp_name/$proj
+            repo=
+        fi
 
         # we have a repo to get specific sources from
         if [ -n "$repo" ]; then
@@ -404,8 +415,7 @@ _edw_build_caged() (
         if [ $push_ok = 0 -a $no_push = false ]; then
             docker push `_edw_full_docker_image -t $tag $proj`
             _edw_bail_out_if_error
-            if [ -n "$src_dir" ]; then
-                # assert [ -n "$repo" ]
+            if [ -n "$repo" -a -n "$src_dir" ]; then
                 cd $src_dir
                 git tag ${git_tag} && git push origin ${git_tag}
                 cd -
