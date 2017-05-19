@@ -672,6 +672,7 @@ _edw_attach() {
     fi
     local service=${1:-web}
     local container_name=`_edw_name_by_service $service`
+    echo "Attaching to $container_name. Use Ctrl+P, Ctrl+Q to detach without killing the container"
     ssh -t $EDW_DEPLOY_USER@$EDW_DEPLOY_HOST "docker attach $container_name"
 }
 
